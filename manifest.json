@@ -1,0 +1,7 @@
+{
+    "display_name": "ComfyUI 插图插件",
+    "loading_order": 1,
+    "requires": [],
+    "optional": [],
+    "js": "index.js"
+}
