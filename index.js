@@ -3,6 +3,7 @@ import { eventSource, event_types, saveSettingsDebounced } from "../../../../scr
 
 const MODULE_NAME = 'comfyui_illustrator';
 const STORAGE_KEY = 'comfyui_illustrator_settings_backup';
+const INSTALL_FLAG_KEY = 'comfyui_illustrator_installed_flag_v1'; // 首次安装自动刷新标志
 const PANEL_ID = 'comfyui-panel';
 const FLOATING_BTN_ID = 'comfyui-floating-quick-btn';
 const LEFT_DOCK_ID = 'comfyui-left-companion-dock';
@@ -71,7 +72,7 @@ const inlineStyle = `
 .comfy-image-container { margin: 10px 0; max-width: 100%; }
 .comfy-image-container img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #555; display: block; }
 
-/* ⭐ 自由拖动、自由拉伸伴读画廊视窗 */
+/* 自由拖拽拉伸的独立画廊视窗 */
 #${LEFT_DOCK_ID} {
     position: fixed;
     left: 25px;
@@ -289,7 +290,6 @@ function createLeftDock() {
     });
 }
 
-// 唤起并显示左侧画廊（带边界与尺寸防崩保护）
 function showInLeftDock(imageUrl, generationId) {
     let dock = document.getElementById(LEFT_DOCK_ID);
     if (!dock) {
@@ -302,7 +302,6 @@ function showInLeftDock(imageUrl, generationId) {
         dock.dataset.activeGenerationId = generationId;
         dock.style.display = 'flex';
 
-        // 校验窗口尺寸，防止因异常存储导致窗口缩成0
         const rect = dock.getBoundingClientRect();
         if (rect.width < 150 || rect.height < 150) {
             dock.style.width = '440px';
@@ -518,7 +517,6 @@ function simpleHash(str) {
     return 'comfy-' + Math.abs(hash).toString(36);
 }
 
-// ⭐ 严格按照所选模式单选渲染，绝不多生一张
 function displayImage(anchorElement, imageUrl, generationId) {
     const mesText = anchorElement.closest('.mes_text');
     const messageNode = anchorElement.closest('.mes');
@@ -527,19 +525,18 @@ function displayImage(anchorElement, imageUrl, generationId) {
     const settings = getSettings();
     const pos = settings.imagePosition || 'left';
 
-    // 无论切到哪种模式，先清理掉该消息内部已有的图片容器
     if (messageNode) {
         const oldInnerImage = messageNode.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
         if (oldInnerImage) oldInnerImage.remove();
     }
 
-    // 1. 如果选的是左侧独立画廊：只在左边弹大图，正文内部绝对不放图！
+    // 1. 如果选的是左侧独立画廊
     if (pos === 'left') {
         showInLeftDock(imageUrl, generationId);
         return;
     }
 
-    // 2. 如果选的是其他位置：关闭左侧画廊，严格只在正文内对应位置放图！
+    // 2. 如果选的是正文嵌入模式
     const dock = document.getElementById(LEFT_DOCK_ID);
     if (dock && dock.dataset.activeGenerationId === generationId) {
         dock.style.display = 'none';
@@ -554,11 +551,11 @@ function displayImage(anchorElement, imageUrl, generationId) {
     container.appendChild(img);
 
     if (pos === 'top') {
-        mesText.prepend(container); // 严格置顶
+        mesText.prepend(container);
     } else if (pos === 'inline') {
-        anchorElement.insertAdjacentElement('afterend', container); // 严格紧跟按钮
+        anchorElement.insertAdjacentElement('afterend', container);
     } else {
-        mesText.appendChild(container); // 严格沉底
+        mesText.appendChild(container);
     }
 }
 
@@ -627,13 +624,11 @@ function setupGeneratedState(generateButton, generationId) {
             delete settings.images[generationId];
             saveSettings();
 
-            // 彻底清理正文图
             if (messageNode) {
                 const imgContainer = messageNode.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
                 if (imgContainer) imgContainer.remove();
             }
 
-            // 彻底关闭左侧图
             const dock = document.getElementById(LEFT_DOCK_ID);
             if (dock && dock.dataset.activeGenerationId === generationId) {
                 dock.style.display = 'none';
@@ -743,6 +738,18 @@ function findImageUrlInHistory(history, promptId, baseUrl) {
 }
 
 export async function init() {
+    // ⭐ 核心：检测首次从 Git 下载安装，自动弹窗并刷新生效
+    if (!localStorage.getItem(INSTALL_FLAG_KEY)) {
+        localStorage.setItem(INSTALL_FLAG_KEY, 'true');
+        if (typeof toastr !== 'undefined') {
+            toastr.success('🎉 ComfyUI 插图插件安装成功！正在自动刷新页面...', '安装完成', { timeOut: 2000 });
+        }
+        setTimeout(() => {
+            window.location.reload();
+        }, 1200);
+        return; // 首次下载中断，交由刷新后完整初始化
+    }
+
     createLeftDock();
     createComfyUIPanel();
     createFloatingButton();
@@ -792,7 +799,10 @@ export async function init() {
     const chatElem = document.getElementById('chat');
     if (chatElem) {
         chatObserver.observe(chatElem, { childList: true, subtree: true });
+        // 连续扫描，确保历史消息与图片完全加载呈现
         chatElem.querySelectorAll('.mes').forEach(processMessageNode);
+        setTimeout(() => chatElem.querySelectorAll('.mes').forEach(processMessageNode), 300);
+        setTimeout(() => chatElem.querySelectorAll('.mes').forEach(processMessageNode), 1000);
     }
 
     console.log('%c[ComfyUI 插图插件] 原生加载成功！', 'color: #28a745; font-weight: bold;');
