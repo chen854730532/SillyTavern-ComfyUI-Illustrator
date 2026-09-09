@@ -9,7 +9,7 @@ const LEFT_DOCK_ID = 'comfyui-left-companion-dock';
 const POLLING_TIMEOUT_MS = 90000;
 const POLLING_INTERVAL_MS = 2000;
 
-// 内嵌核心样式（增加相册翻页控件样式）
+// 内嵌核心样式（含沉浸式左右分屏翻页）
 const inlineStyle = `
 #${PANEL_ID} {
     display: none;
@@ -66,14 +66,12 @@ const inlineStyle = `
 .comfy-btn.testing { background: #6c757d; }
 .comfy-btn.success { background: #28a745; }
 .comfy-btn.error   { background: #dc3545; }
-.comfy-btn.view    { background: #17a2b8; }
-.comfy-btn.view:hover { background: #138496; }
 .comfy-button-group { display: inline-flex; align-items: center; gap: 5px; margin: 5px 0; }
 
 .comfy-image-container { margin: 10px 0; max-width: 100%; }
 .comfy-image-container img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #555; display: block; }
 
-/* 自由拖动、自由拉伸伴读画廊视窗 */
+/* 自由拖动、拉伸的伴读画廊 */
 #${LEFT_DOCK_ID} {
     position: fixed;
     left: 25px;
@@ -87,7 +85,7 @@ const inlineStyle = `
     z-index: 10000;
     display: none;
     flex-direction: column;
-    background: rgba(18, 18, 18, 0.85);
+    background: rgba(18, 18, 18, 0.88);
     backdrop-filter: blur(14px);
     border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 12px;
@@ -115,23 +113,12 @@ const inlineStyle = `
     align-items: center;
     gap: 8px;
 }
-/* 相册翻页控制条 */
-#${LEFT_DOCK_ID} .dock-gallery-nav {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: rgba(255, 255, 255, 0.08);
+#${LEFT_DOCK_ID} .dock-counter-badge {
+    background: rgba(255, 255, 255, 0.12);
     padding: 2px 8px;
-    border-radius: 12px;
+    border-radius: 10px;
     font-size: 11px;
     color: #bbb;
-}
-#${LEFT_DOCK_ID} .dock-gallery-nav i {
-    cursor: pointer;
-    padding: 2px 4px;
-}
-#${LEFT_DOCK_ID} .dock-gallery-nav i:hover {
-    color: #fff;
 }
 #${LEFT_DOCK_ID} .dock-header-actions i {
     cursor: pointer;
@@ -143,21 +130,83 @@ const inlineStyle = `
     opacity: 1;
     color: #fff;
 }
+
+/* ⭐ 核心：沉浸式左右分屏翻页区域 */
 #${LEFT_DOCK_ID} .dock-body {
     flex-grow: 1;
     overflow: hidden;
+    position: relative;
     display: flex;
     justify-content: center;
     align-items: center;
     width: 100%;
     height: 100%;
 }
-#${LEFT_DOCK_ID} img {
+#${LEFT_DOCK_ID} .dock-img-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+#${LEFT_DOCK_ID} img#comfyui-dock-img {
     width: 100%;
     height: 100%;
     object-fit: contain;
     border-radius: 6px;
+    user-select: none;
+    pointer-events: none; /* 穿透至左右控制层 */
+}
+
+/* 左右两侧全覆盖判定区 */
+.dock-nav-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    z-index: 10;
+    user-select: none;
+}
+.dock-nav-zone.left {
+    left: 0;
+    justify-content: flex-start;
+    padding-left: 12px;
+}
+.dock-nav-zone.right {
+    right: 0;
+    justify-content: flex-end;
+    padding-right: 12px;
+}
+
+/* 悬停时出现的半透明磨砂箭头指示 */
+.dock-nav-arrow {
+    width: 36px;
+    height: 54px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 18px;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+/* 鼠标滑进图片区域，左右两边同时隐隐浮现箭头 */
+.dock-img-wrapper:hover .dock-nav-arrow {
+    opacity: 0.35;
+}
+/* 鼠标具体悬停到某一侧，那一侧的箭头高亮突出 */
+.dock-nav-zone:hover .dock-nav-arrow {
+    opacity: 0.95;
+    background: rgba(0, 0, 0, 0.7);
+    transform: scale(1.06);
 }
 
 /* 调色盘悬浮球 */
@@ -241,7 +290,7 @@ function saveDockGeometry() {
     }
 }
 
-// 获取当前聊天里按楼层顺序排列的所有图片列表
+// 获取当前聊天中按顺序排列的所有插画
 function getChatImageList() {
     const list = [];
     const settings = getSettings();
@@ -259,7 +308,7 @@ function getChatImageList() {
     return list;
 }
 
-// 更新画廊顶部的相册翻页指示器 (例如: 2 / 5)
+// 更新画廊数字计数标签
 function updateGalleryNav() {
     const dock = document.getElementById(LEFT_DOCK_ID);
     const counter = document.getElementById('comfyui-dock-counter');
@@ -287,11 +336,7 @@ function createLeftDock() {
                 <div class="dock-header-left">
                     <i class="fa-solid fa-grip-vertical"></i>
                     <span><b>插画画廊</b></span>
-                    <div class="dock-gallery-nav" title="相册翻页">
-                        <i class="fa-solid fa-chevron-left" id="comfyui-dock-prev" title="上一张插画"></i>
-                        <span id="comfyui-dock-counter">1 / 1</span>
-                        <i class="fa-solid fa-chevron-right" id="comfyui-dock-next" title="下一张插画"></i>
-                    </div>
+                    <span class="dock-counter-badge" id="comfyui-dock-counter">1 / 1</span>
                 </div>
                 <div class="dock-header-actions">
                     <i class="fa-solid fa-arrows-rotate" id="comfyui-dock-reset" title="复位位置与大小"></i>
@@ -299,14 +344,23 @@ function createLeftDock() {
                 </div>
             </div>
             <div class="dock-body">
-                <img id="comfyui-dock-img" title="点击可在新标签页查看高清原图" />
+                <div class="dock-img-wrapper">
+                    <img id="comfyui-dock-img" />
+                    <!-- 左侧全覆盖判定区：上一张 -->
+                    <div class="dock-nav-zone left" id="comfyui-dock-prev" title="上一张插画（点击图片左半区）">
+                        <div class="dock-nav-arrow"><i class="fa-solid fa-chevron-left"></i></div>
+                    </div>
+                    <!-- 右侧全覆盖判定区：下一张 -->
+                    <div class="dock-nav-zone right" id="comfyui-dock-next" title="下一张插画（点击图片右半区）">
+                        <div class="dock-nav-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+                    </div>
+                </div>
             </div>
         </div>
     `;
     document.body.insertAdjacentHTML('beforeend', dockHTML);
 
     const dock = document.getElementById(LEFT_DOCK_ID);
-    const dockImg = document.getElementById('comfyui-dock-img');
     const resetBtn = document.getElementById('comfyui-dock-reset');
     const closeBtn = document.getElementById('comfyui-dock-close');
     const prevBtn = document.getElementById('comfyui-dock-prev');
@@ -335,12 +389,9 @@ function createLeftDock() {
     });
     observer.observe(dock);
 
-    dockImg.addEventListener('click', () => {
-        if (dockImg.src) window.open(dockImg.src, '_blank');
-    });
-
-    // 相册翻页：上一张
-    prevBtn.addEventListener('click', () => {
+    // 点击左半边区域：上一张
+    prevBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const list = getChatImageList();
         if (list.length <= 1) return;
         const currentId = dock.dataset.activeGenerationId;
@@ -349,8 +400,9 @@ function createLeftDock() {
         showInLeftDock(list[index].url, list[index].generationId);
     });
 
-    // 相册翻页：下一张
-    nextBtn.addEventListener('click', () => {
+    // 点击右半边区域：下一张
+    nextBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const list = getChatImageList();
         if (list.length <= 1) return;
         const currentId = dock.dataset.activeGenerationId;
@@ -430,7 +482,7 @@ function createComfyUIPanel() {
                 </div>
                 <label style="font-weight:bold; display:block; margin-top:4px;">图片生成位置（单选）：</label>
                 <select id="comfyui-img-pos">
-                    <option value="left">左侧独立画廊（相册翻页，正文仅保留查看按钮）</option>
+                    <option value="left">左侧独立画廊（相册左右分屏翻页，正文仅保留按钮）</option>
                     <option value="bottom">消息最底部（正文最末尾，左侧不弹窗）</option>
                     <option value="top">消息最顶部（置顶封面，左侧不弹窗）</option>
                     <option value="inline">标签原位（紧随按钮之后，左侧不弹窗）</option>
@@ -615,13 +667,11 @@ function displayImage(anchorElement, imageUrl, generationId) {
         if (oldInnerImage) oldInnerImage.remove();
     }
 
-    // 1. 如果选的是左侧独立画廊模式：展示到画廊并更新相册
     if (pos === 'left') {
         showInLeftDock(imageUrl, generationId);
         return;
     }
 
-    // 2. 如果选的是正文嵌入模式
     const dock = document.getElementById(LEFT_DOCK_ID);
     if (dock && dock.dataset.activeGenerationId === generationId) {
         dock.style.display = 'none';
@@ -686,7 +736,7 @@ async function processMessageNode(messageNode) {
     });
 }
 
-// 设置已生成状态：增加【查看插画】按钮
+// ⭐ 样式与“开始生成”完全一致的【查看插画】按钮
 function setupGeneratedState(generateButton, generationId) {
     generateButton.textContent = '重新生成';
     generateButton.disabled = false;
@@ -701,13 +751,13 @@ function setupGeneratedState(generateButton, generationId) {
     const messageNode = generateButton.closest('.mes');
     const settings = getSettings();
 
-    // 🌟 在左侧画廊模式下，增加【查看插画】按钮，方便往上翻聊天随时点开旧图
+    // 仅文字、样式大小完全一致的按钮
     let viewButton = group.querySelector('.comfy-view-button');
     if (!viewButton && settings.imagePosition === 'left') {
         viewButton = document.createElement('button');
-        viewButton.className = 'comfy-btn view comfy-view-button';
-        viewButton.innerHTML = `<i class="fa-solid fa-eye"></i> 查看插画`;
-        viewButton.title = '点击将左侧画廊切换为此图';
+        viewButton.className = 'comfy-btn comfy-view-button';
+        viewButton.textContent = '查看插画';
+        viewButton.title = '将左侧画廊切换为此图';
         viewButton.addEventListener('click', () => {
             const currentSettings = getSettings();
             if (currentSettings.images && currentSettings.images[generationId]) {
