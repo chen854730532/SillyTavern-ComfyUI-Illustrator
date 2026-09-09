@@ -9,7 +9,7 @@ const LEFT_DOCK_ID = 'comfyui-left-companion-dock';
 const POLLING_TIMEOUT_MS = 90000;
 const POLLING_INTERVAL_MS = 2000;
 
-// 内嵌核心样式（彻底移除导致跳动的 transform）
+// 内嵌核心样式
 const inlineStyle = `
 #${PANEL_ID} {
     display: none;
@@ -26,7 +26,6 @@ const inlineStyle = `
     padding: 15px;
     box-sizing: border-box;
     flex-direction: column;
-    /* 注意：绝不使用 transform: translate(-50%, -50%)，防止拖拽坐标跳跃 */
 }
 #${PANEL_ID} .panel-control-bar {
     cursor: move;
@@ -72,7 +71,7 @@ const inlineStyle = `
 .comfy-image-container { margin: 10px 0; max-width: 100%; }
 .comfy-image-container img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #555; display: block; }
 
-/* 自由拉伸伴读画廊 */
+/* ⭐ 自由拖动、自由拉伸伴读画廊视窗 */
 #${LEFT_DOCK_ID} {
     position: fixed;
     left: 25px;
@@ -83,14 +82,14 @@ const inlineStyle = `
     min-height: 200px;
     max-width: 95vw;
     max-height: 95vh;
-    z-index: 999;
+    z-index: 10000;
     display: none;
     flex-direction: column;
-    background: rgba(18, 18, 18, 0.78);
+    background: rgba(18, 18, 18, 0.85);
     backdrop-filter: blur(14px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.85);
+    box-shadow: 0 8px 35px rgba(0, 0, 0, 0.9);
     padding: 8px 10px;
     box-sizing: border-box;
     resize: both;
@@ -141,7 +140,7 @@ const inlineStyle = `
     cursor: pointer;
 }
 
-/* ⭐ 可自由拖动的调色盘悬浮球 */
+/* 调色盘悬浮球 */
 #${FLOATING_BTN_ID} {
     position: fixed;
     right: 20px;
@@ -155,7 +154,7 @@ const inlineStyle = `
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: grab;             /* 拖动抓手手势 */
+    cursor: grab;
     user-select: none;
     z-index: 99999;
     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
@@ -175,8 +174,8 @@ const defaultSettings = {
     endTag: '###',
     imagePosition: 'left',
     dockGeometry: null,
-    panelPosition: null,      // 设置窗口坐标记录
-    floatingBtnPos: null,     // 悬浮球坐标记录
+    panelPosition: null,
+    floatingBtnPos: null,
     workflow: '',
     images: {}
 };
@@ -211,13 +210,15 @@ function saveDockGeometry() {
     const dock = document.getElementById(LEFT_DOCK_ID);
     if (!dock) return;
     const settings = getSettings();
-    settings.dockGeometry = {
-        top: dock.style.top,
-        left: dock.style.left,
-        width: dock.style.width,
-        height: dock.style.height
-    };
-    saveSettings();
+    if (dock.offsetWidth > 100 && dock.offsetHeight > 100) {
+        settings.dockGeometry = {
+            top: dock.style.top,
+            left: dock.style.left,
+            width: dock.style.width,
+            height: dock.style.height
+        };
+        saveSettings();
+    }
 }
 
 function createLeftDock() {
@@ -228,11 +229,11 @@ function createLeftDock() {
             <div class="dock-header">
                 <div class="dock-header-left">
                     <i class="fa-solid fa-grip-vertical"></i>
-                    <span><b>场景插画</b></span>
+                    <span><b>伴读插画画廊</b></span>
                 </div>
                 <div class="dock-header-actions">
                     <i class="fa-solid fa-arrows-rotate" id="comfyui-dock-reset" title="复位位置与大小"></i>
-                    <i class="fa-solid fa-xmark" id="comfyui-dock-close" title="关闭窗口"></i>
+                    <i class="fa-solid fa-xmark" id="comfyui-dock-close" title="关闭画廊"></i>
                 </div>
             </div>
             <div class="dock-body">
@@ -280,12 +281,38 @@ function createLeftDock() {
         dock.style.width = '440px';
         dock.style.height = '600px';
         saveDockGeometry();
-        toastr.info('已复位到默认红框位置与大小');
+        toastr.info('已复位到默认左侧位置与大小');
     });
 
     closeBtn.addEventListener('click', () => {
         dock.style.display = 'none';
     });
+}
+
+// 唤起并显示左侧画廊（带边界与尺寸防崩保护）
+function showInLeftDock(imageUrl, generationId) {
+    let dock = document.getElementById(LEFT_DOCK_ID);
+    if (!dock) {
+        createLeftDock();
+        dock = document.getElementById(LEFT_DOCK_ID);
+    }
+    const dockImg = document.getElementById('comfyui-dock-img');
+    if (dock && dockImg) {
+        dockImg.src = imageUrl;
+        dock.dataset.activeGenerationId = generationId;
+        dock.style.display = 'flex';
+
+        // 校验窗口尺寸，防止因异常存储导致窗口缩成0
+        const rect = dock.getBoundingClientRect();
+        if (rect.width < 150 || rect.height < 150) {
+            dock.style.width = '440px';
+            dock.style.height = '600px';
+        }
+        if (rect.top < 0 || rect.top > window.innerHeight - 50 || rect.left < 0 || rect.left > window.innerWidth - 50) {
+            dock.style.top = '75px';
+            dock.style.left = '25px';
+        }
+    }
 }
 
 function createComfyUIPanel() {
@@ -317,12 +344,12 @@ function createComfyUIPanel() {
                         <input id="comfyui-end-tag" type="text">
                     </div>
                 </div>
-                <label style="font-weight:bold; display:block; margin-top:4px;">图片展示位置:</label>
+                <label style="font-weight:bold; display:block; margin-top:4px;">图片生成位置（单选）：</label>
                 <select id="comfyui-img-pos">
-                    <option value="left">⭐ 自由浮动画廊（可任意拖拽拉伸，位置自动记忆）</option>
-                    <option value="bottom">消息最底部（整段对话末尾）</option>
-                    <option value="top">消息最顶部（置顶插画封面）</option>
-                    <option value="inline">标签原位（紧随生成按钮）</option>
+                    <option value="left">左侧独立画廊（红框位置，正文不显示图片）</option>
+                    <option value="bottom">消息最底部（正文最末尾，左侧不弹窗）</option>
+                    <option value="top">消息最顶部（置顶封面，左侧不弹窗）</option>
+                    <option value="inline">标签原位（紧随按钮之后，左侧不弹窗）</option>
                 </select>
 
                 <label style="font-weight:bold; display:block; margin-top:4px;">工作流 (API 格式 JSON):</label>
@@ -354,7 +381,6 @@ function initPanelLogic() {
     endInput.value = settings.endTag || '###';
     posSelect.value = settings.imagePosition || 'left';
 
-    // 1. 初始化设置窗口位置（计算像素居中，绝不跳动）
     if (settings.panelPosition && settings.panelPosition.top) {
         panel.style.top = settings.panelPosition.top;
         panel.style.left = settings.panelPosition.left;
@@ -367,7 +393,6 @@ function initPanelLogic() {
 
     closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
 
-    // 2. 拖拽设置面板（平滑无跳动）
     if (typeof $ !== 'undefined' && typeof $.fn.draggable !== 'undefined') {
         $(`#${PANEL_ID}`).draggable({
             handle: ".panel-control-bar",
@@ -434,7 +459,6 @@ function initPanelLogic() {
     });
 }
 
-// 创建并初始化可自由拖动的悬浮球 🎨
 function createFloatingButton() {
     if (document.getElementById(FLOATING_BTN_ID)) return;
 
@@ -444,7 +468,6 @@ function createFloatingButton() {
     btn.innerHTML = `<i class="fa-solid fa-palette" style="font-size:18px;"></i>`;
 
     const settings = getSettings();
-    // 恢复悬浮球历史位置
     if (settings.floatingBtnPos) {
         btn.style.top = settings.floatingBtnPos.top;
         btn.style.left = settings.floatingBtnPos.left;
@@ -454,9 +477,7 @@ function createFloatingButton() {
 
     document.body.appendChild(btn);
 
-    // 拖拽防误触逻辑
     let isDragging = false;
-
     if (typeof $ !== 'undefined' && typeof $.fn.draggable !== 'undefined') {
         $(`#${FLOATING_BTN_ID}`).draggable({
             containment: "window",
@@ -476,7 +497,7 @@ function createFloatingButton() {
     }
 
     btn.addEventListener('click', () => {
-        if (isDragging) return; // 拖动结束时不触发打开窗口
+        if (isDragging) return;
         const panel = document.getElementById(PANEL_ID);
         if (panel) {
             panel.style.display = (panel.style.display === 'flex') ? 'none' : 'flex';
@@ -497,42 +518,48 @@ function simpleHash(str) {
     return 'comfy-' + Math.abs(hash).toString(36);
 }
 
+// ⭐ 严格按照所选模式单选渲染，绝不多生一张
 function displayImage(anchorElement, imageUrl, generationId) {
     const mesText = anchorElement.closest('.mes_text');
+    const messageNode = anchorElement.closest('.mes');
     if (!mesText) return;
 
     const settings = getSettings();
     const pos = settings.imagePosition || 'left';
 
+    // 无论切到哪种模式，先清理掉该消息内部已有的图片容器
+    if (messageNode) {
+        const oldInnerImage = messageNode.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
+        if (oldInnerImage) oldInnerImage.remove();
+    }
+
+    // 1. 如果选的是左侧独立画廊：只在左边弹大图，正文内部绝对不放图！
     if (pos === 'left') {
-        const dock = document.getElementById(LEFT_DOCK_ID);
-        const dockImg = document.getElementById('comfyui-dock-img');
-        if (dock && dockImg) {
-            dockImg.src = imageUrl;
-            dock.style.display = 'flex';
-            dock.dataset.activeGenerationId = generationId;
-        }
+        showInLeftDock(imageUrl, generationId);
         return;
     }
 
-    let container = mesText.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
-    if (!container) {
-        container = document.createElement('div');
-        container.className = 'comfy-image-container';
-        container.dataset.generationId = generationId;
-        const img = document.createElement('img');
-        img.alt = 'ComfyUI Image';
-        container.appendChild(img);
-
-        if (pos === 'top') {
-            mesText.prepend(container);
-        } else if (pos === 'bottom') {
-            mesText.appendChild(container);
-        } else {
-            anchorElement.insertAdjacentElement('afterend', container);
-        }
+    // 2. 如果选的是其他位置：关闭左侧画廊，严格只在正文内对应位置放图！
+    const dock = document.getElementById(LEFT_DOCK_ID);
+    if (dock && dock.dataset.activeGenerationId === generationId) {
+        dock.style.display = 'none';
     }
-    container.querySelector('img').src = imageUrl;
+
+    let container = document.createElement('div');
+    container.className = 'comfy-image-container';
+    container.dataset.generationId = generationId;
+    const img = document.createElement('img');
+    img.alt = 'ComfyUI Image';
+    img.src = imageUrl;
+    container.appendChild(img);
+
+    if (pos === 'top') {
+        mesText.prepend(container); // 严格置顶
+    } else if (pos === 'inline') {
+        anchorElement.insertAdjacentElement('afterend', container); // 严格紧跟按钮
+    } else {
+        mesText.appendChild(container); // 严格沉底
+    }
 }
 
 async function processMessageNode(messageNode) {
@@ -600,11 +627,13 @@ function setupGeneratedState(generateButton, generationId) {
             delete settings.images[generationId];
             saveSettings();
 
+            // 彻底清理正文图
             if (messageNode) {
                 const imgContainer = messageNode.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
                 if (imgContainer) imgContainer.remove();
             }
 
+            // 彻底关闭左侧图
             const dock = document.getElementById(LEFT_DOCK_ID);
             if (dock && dock.dataset.activeGenerationId === generationId) {
                 dock.style.display = 'none';
