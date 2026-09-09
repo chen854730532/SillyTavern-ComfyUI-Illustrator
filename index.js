@@ -9,7 +9,7 @@ const LEFT_DOCK_ID = 'comfyui-left-companion-dock';
 const POLLING_TIMEOUT_MS = 90000;
 const POLLING_INTERVAL_MS = 2000;
 
-// 内嵌核心样式
+// 内嵌核心样式（增加相册翻页控件样式）
 const inlineStyle = `
 #${PANEL_ID} {
     display: none;
@@ -66,6 +66,8 @@ const inlineStyle = `
 .comfy-btn.testing { background: #6c757d; }
 .comfy-btn.success { background: #28a745; }
 .comfy-btn.error   { background: #dc3545; }
+.comfy-btn.view    { background: #17a2b8; }
+.comfy-btn.view:hover { background: #138496; }
 .comfy-button-group { display: inline-flex; align-items: center; gap: 5px; margin: 5px 0; }
 
 .comfy-image-container { margin: 10px 0; max-width: 100%; }
@@ -111,7 +113,25 @@ const inlineStyle = `
 #${LEFT_DOCK_ID} .dock-header-left {
     display: flex;
     align-items: center;
+    gap: 8px;
+}
+/* 相册翻页控制条 */
+#${LEFT_DOCK_ID} .dock-gallery-nav {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    color: #bbb;
+}
+#${LEFT_DOCK_ID} .dock-gallery-nav i {
+    cursor: pointer;
+    padding: 2px 4px;
+}
+#${LEFT_DOCK_ID} .dock-gallery-nav i:hover {
+    color: #fff;
 }
 #${LEFT_DOCK_ID} .dock-header-actions i {
     cursor: pointer;
@@ -221,6 +241,43 @@ function saveDockGeometry() {
     }
 }
 
+// 获取当前聊天里按楼层顺序排列的所有图片列表
+function getChatImageList() {
+    const list = [];
+    const settings = getSettings();
+    const groups = document.querySelectorAll('#chat .comfy-button-group');
+    groups.forEach(group => {
+        const genId = group.dataset.generationId;
+        if (genId && settings.images && settings.images[genId]) {
+            list.push({
+                generationId: genId,
+                url: settings.images[genId],
+                element: group
+            });
+        }
+    });
+    return list;
+}
+
+// 更新画廊顶部的相册翻页指示器 (例如: 2 / 5)
+function updateGalleryNav() {
+    const dock = document.getElementById(LEFT_DOCK_ID);
+    const counter = document.getElementById('comfyui-dock-counter');
+    if (!dock || !counter) return;
+
+    const list = getChatImageList();
+    const currentId = dock.dataset.activeGenerationId;
+    const index = list.findIndex(item => item.generationId === currentId);
+
+    if (list.length > 0 && index !== -1) {
+        counter.textContent = `${index + 1} / ${list.length}`;
+    } else if (list.length > 0) {
+        counter.textContent = `1 / ${list.length}`;
+    } else {
+        counter.textContent = `0 / 0`;
+    }
+}
+
 function createLeftDock() {
     if (document.getElementById(LEFT_DOCK_ID)) return;
 
@@ -229,7 +286,12 @@ function createLeftDock() {
             <div class="dock-header">
                 <div class="dock-header-left">
                     <i class="fa-solid fa-grip-vertical"></i>
-                    <span><b>伴读插画画廊</b></span>
+                    <span><b>插画画廊</b></span>
+                    <div class="dock-gallery-nav" title="相册翻页">
+                        <i class="fa-solid fa-chevron-left" id="comfyui-dock-prev" title="上一张插画"></i>
+                        <span id="comfyui-dock-counter">1 / 1</span>
+                        <i class="fa-solid fa-chevron-right" id="comfyui-dock-next" title="下一张插画"></i>
+                    </div>
                 </div>
                 <div class="dock-header-actions">
                     <i class="fa-solid fa-arrows-rotate" id="comfyui-dock-reset" title="复位位置与大小"></i>
@@ -247,6 +309,8 @@ function createLeftDock() {
     const dockImg = document.getElementById('comfyui-dock-img');
     const resetBtn = document.getElementById('comfyui-dock-reset');
     const closeBtn = document.getElementById('comfyui-dock-close');
+    const prevBtn = document.getElementById('comfyui-dock-prev');
+    const nextBtn = document.getElementById('comfyui-dock-next');
 
     const settings = getSettings();
     if (settings.dockGeometry) {
@@ -273,6 +337,26 @@ function createLeftDock() {
 
     dockImg.addEventListener('click', () => {
         if (dockImg.src) window.open(dockImg.src, '_blank');
+    });
+
+    // 相册翻页：上一张
+    prevBtn.addEventListener('click', () => {
+        const list = getChatImageList();
+        if (list.length <= 1) return;
+        const currentId = dock.dataset.activeGenerationId;
+        let index = list.findIndex(item => item.generationId === currentId);
+        index = (index - 1 + list.length) % list.length;
+        showInLeftDock(list[index].url, list[index].generationId);
+    });
+
+    // 相册翻页：下一张
+    nextBtn.addEventListener('click', () => {
+        const list = getChatImageList();
+        if (list.length <= 1) return;
+        const currentId = dock.dataset.activeGenerationId;
+        let index = list.findIndex(item => item.generationId === currentId);
+        index = (index + 1) % list.length;
+        showInLeftDock(list[index].url, list[index].generationId);
     });
 
     resetBtn.addEventListener('click', () => {
@@ -310,6 +394,8 @@ function showInLeftDock(imageUrl, generationId) {
             dock.style.top = '75px';
             dock.style.left = '25px';
         }
+
+        updateGalleryNav();
     }
 }
 
@@ -344,7 +430,7 @@ function createComfyUIPanel() {
                 </div>
                 <label style="font-weight:bold; display:block; margin-top:4px;">图片生成位置（单选）：</label>
                 <select id="comfyui-img-pos">
-                    <option value="left">左侧独立画廊（红框位置，正文不显示图片）</option>
+                    <option value="left">左侧独立画廊（相册翻页，正文仅保留查看按钮）</option>
                     <option value="bottom">消息最底部（正文最末尾，左侧不弹窗）</option>
                     <option value="top">消息最顶部（置顶封面，左侧不弹窗）</option>
                     <option value="inline">标签原位（紧随按钮之后，左侧不弹窗）</option>
@@ -529,11 +615,13 @@ function displayImage(anchorElement, imageUrl, generationId) {
         if (oldInnerImage) oldInnerImage.remove();
     }
 
+    // 1. 如果选的是左侧独立画廊模式：展示到画廊并更新相册
     if (pos === 'left') {
         showInLeftDock(imageUrl, generationId);
         return;
     }
 
+    // 2. 如果选的是正文嵌入模式
     const dock = document.getElementById(LEFT_DOCK_ID);
     if (dock && dock.dataset.activeGenerationId === generationId) {
         dock.style.display = 'none';
@@ -598,6 +686,7 @@ async function processMessageNode(messageNode) {
     });
 }
 
+// 设置已生成状态：增加【查看插画】按钮
 function setupGeneratedState(generateButton, generationId) {
     generateButton.textContent = '重新生成';
     generateButton.disabled = false;
@@ -610,15 +699,34 @@ function setupGeneratedState(generateButton, generationId) {
 
     const group = generateButton.closest('.comfy-button-group');
     const messageNode = generateButton.closest('.mes');
-    let deleteButton = group.querySelector('.comfy-delete-button');
+    const settings = getSettings();
 
+    // 🌟 在左侧画廊模式下，增加【查看插画】按钮，方便往上翻聊天随时点开旧图
+    let viewButton = group.querySelector('.comfy-view-button');
+    if (!viewButton && settings.imagePosition === 'left') {
+        viewButton = document.createElement('button');
+        viewButton.className = 'comfy-btn view comfy-view-button';
+        viewButton.innerHTML = `<i class="fa-solid fa-eye"></i> 查看插画`;
+        viewButton.title = '点击将左侧画廊切换为此图';
+        viewButton.addEventListener('click', () => {
+            const currentSettings = getSettings();
+            if (currentSettings.images && currentSettings.images[generationId]) {
+                showInLeftDock(currentSettings.images[generationId], generationId);
+            }
+        });
+        generateButton.insertAdjacentElement('beforebegin', viewButton);
+    } else if (viewButton && settings.imagePosition !== 'left') {
+        viewButton.remove();
+    }
+
+    let deleteButton = group.querySelector('.comfy-delete-button');
     if (!deleteButton) {
         deleteButton = document.createElement('button');
         deleteButton.textContent = '删除';
         deleteButton.className = 'comfy-btn error comfy-delete-button';
         deleteButton.addEventListener('click', async () => {
-            const settings = getSettings();
-            delete settings.images[generationId];
+            const currentSettings = getSettings();
+            delete currentSettings.images[generationId];
             saveSettings();
 
             if (messageNode) {
@@ -631,8 +739,12 @@ function setupGeneratedState(generateButton, generationId) {
                 dock.style.display = 'none';
             }
 
+            const vBtn = group.querySelector('.comfy-view-button');
+            if (vBtn) vBtn.remove();
+
             deleteButton.remove();
             generateButton.textContent = '开始生成';
+            updateGalleryNav();
         });
         generateButton.insertAdjacentElement('afterend', deleteButton);
     }
@@ -734,21 +846,16 @@ function findImageUrlInHistory(history, promptId, baseUrl) {
     return null;
 }
 
-// ⭐ 智能动态安装检测（彻底告别死板缓存，每一次重新安装都能自动刷新）
 function checkDynamicInstallReload() {
-    // 如果本次会话刚由插件自动刷新完成，立即放行，绝不无限循环
     if (sessionStorage.getItem('comfyui_just_installed_reload')) {
         sessionStorage.removeItem('comfyui_just_installed_reload');
         return false;
     }
 
-    // 清理旧版本的死板缓存键（如果有的话）
     try {
         localStorage.removeItem('comfyui_illustrator_installed_flag_v1');
     } catch (e) {}
 
-    // 检测当前环境：是否处于酒馆运行中被 Git 动态安装注入
-    // 特征：安装弹窗存在 / 输入框存在，且页面已运行超过 2.5 秒
     const isInstallerActive = document.getElementById('extension_url') || document.querySelector('#extensions_settings');
     const isMidSession = performance.now() > 2500 && document.readyState === 'complete';
 
@@ -760,14 +867,13 @@ function checkDynamicInstallReload() {
         setTimeout(() => {
             window.location.reload();
         }, 1000);
-        return true; // 拦截并准备刷新
+        return true;
     }
 
     return false;
 }
 
 export async function init() {
-    // 每次从 Git 下载时，精准拦截并自动重载
     if (checkDynamicInstallReload()) {
         return;
     }
@@ -803,6 +909,7 @@ export async function init() {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         setTimeout(() => {
             document.querySelectorAll('#chat .mes').forEach(processMessageNode);
+            updateGalleryNav();
         }, 500);
     });
 
