@@ -9,7 +9,11 @@ const LEFT_DOCK_ID = 'comfyui-left-companion-dock';
 const POLLING_TIMEOUT_MS = 90000;
 const POLLING_INTERVAL_MS = 2000;
 
-// 内嵌核心样式（含沉浸式左右分屏翻页）
+// IndexedDB 离线数据库
+const DB_NAME = 'ComfyUI_Illustrator_Offline_DB';
+const DB_VERSION = 1;
+const STORE_NAME = 'offline_images';
+
 const inlineStyle = `
 #${PANEL_ID} {
     display: none;
@@ -71,7 +75,6 @@ const inlineStyle = `
 .comfy-image-container { margin: 10px 0; max-width: 100%; }
 .comfy-image-container img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #555; display: block; }
 
-/* 自由拖动、拉伸的伴读画廊 */
 #${LEFT_DOCK_ID} {
     position: fixed;
     left: 25px;
@@ -131,7 +134,6 @@ const inlineStyle = `
     color: #fff;
 }
 
-/* ⭐ 核心：沉浸式左右分屏翻页区域 */
 #${LEFT_DOCK_ID} .dock-body {
     flex-grow: 1;
     overflow: hidden;
@@ -156,10 +158,9 @@ const inlineStyle = `
     object-fit: contain;
     border-radius: 6px;
     user-select: none;
-    pointer-events: none; /* 穿透至左右控制层 */
+    pointer-events: none;
 }
 
-/* 左右两侧全覆盖判定区 */
 .dock-nav-zone {
     position: absolute;
     top: 0;
@@ -182,7 +183,6 @@ const inlineStyle = `
     padding-right: 12px;
 }
 
-/* 悬停时出现的半透明磨砂箭头指示 */
 .dock-nav-arrow {
     width: 36px;
     height: 54px;
@@ -198,18 +198,15 @@ const inlineStyle = `
     opacity: 0;
     transition: opacity 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
-/* 鼠标滑进图片区域，左右两边同时隐隐浮现箭头 */
 .dock-img-wrapper:hover .dock-nav-arrow {
     opacity: 0.35;
 }
-/* 鼠标具体悬停到某一侧，那一侧的箭头高亮突出 */
 .dock-nav-zone:hover .dock-nav-arrow {
     opacity: 0.95;
     background: rgba(0, 0, 0, 0.7);
     transform: scale(1.06);
 }
 
-/* 调色盘悬浮球 */
 #${FLOATING_BTN_ID} {
     position: fixed;
     right: 20px;
@@ -248,6 +245,93 @@ const defaultSettings = {
     workflow: '',
     images: {}
 };
+
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME);
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function saveImageBlob(id, blob) {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(blob, id);
+        return new Promise(resolve => tx.oncomplete = resolve);
+    } catch (e) {
+        console.error('IndexedDB 保存失败:', e);
+    }
+}
+
+async function getImageBlobUrl(id) {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(id);
+        return new Promise(resolve => {
+            req.onsuccess = () => {
+                if (req.result) {
+                    resolve(URL.createObjectURL(req.result));
+                } else {
+                    resolve(null);
+                }
+            };
+            req.onerror = () => resolve(null);
+        });
+    } catch (e) {
+        return null;
+    }
+}
+
+async function deleteImageBlob(id) {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(id);
+    } catch (e) {}
+}
+
+async function clearAllImageBlobs() {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).clear();
+    } catch (e) {}
+}
+
+// ⭐ 核心：自动巡检旧图，如果本地数据库没有，且 ComfyUI 正在运行，则自动转存进离线库
+async function autoCacheOldImage(generationId, originalUrl) {
+    if (!originalUrl || !originalUrl.startsWith('http')) return;
+    try {
+        // 先看数据库里是否已经有备份了
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(generationId);
+        req.onsuccess = async () => {
+            if (!req.result) {
+                // 本地没有，尝试从原始地址下载并存入
+                try {
+                    const res = await fetch(originalUrl);
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        await saveImageBlob(generationId, blob);
+                        console.log(`[ComfyUI 插图插件] 历史插图已成功自动备份至离线数据库: ${generationId}`);
+                    }
+                } catch (err) {
+                    // ComfyUI 未启动时忽略
+                }
+            }
+        };
+    } catch (e) {}
+}
 
 function getSettings() {
     extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
@@ -290,7 +374,6 @@ function saveDockGeometry() {
     }
 }
 
-// 获取当前聊天中按顺序排列的所有插画
 function getChatImageList() {
     const list = [];
     const settings = getSettings();
@@ -308,7 +391,6 @@ function getChatImageList() {
     return list;
 }
 
-// 更新画廊数字计数标签
 function updateGalleryNav() {
     const dock = document.getElementById(LEFT_DOCK_ID);
     const counter = document.getElementById('comfyui-dock-counter');
@@ -346,11 +428,9 @@ function createLeftDock() {
             <div class="dock-body">
                 <div class="dock-img-wrapper">
                     <img id="comfyui-dock-img" />
-                    <!-- 左侧全覆盖判定区：上一张 -->
                     <div class="dock-nav-zone left" id="comfyui-dock-prev" title="上一张插画（点击图片左半区）">
                         <div class="dock-nav-arrow"><i class="fa-solid fa-chevron-left"></i></div>
                     </div>
-                    <!-- 右侧全覆盖判定区：下一张 -->
                     <div class="dock-nav-zone right" id="comfyui-dock-next" title="下一张插画（点击图片右半区）">
                         <div class="dock-nav-arrow"><i class="fa-solid fa-chevron-right"></i></div>
                     </div>
@@ -389,26 +469,24 @@ function createLeftDock() {
     });
     observer.observe(dock);
 
-    // 点击左半边区域：上一张
-    prevBtn.addEventListener('click', (e) => {
+    prevBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const list = getChatImageList();
         if (list.length <= 1) return;
         const currentId = dock.dataset.activeGenerationId;
         let index = list.findIndex(item => item.generationId === currentId);
         index = (index - 1 + list.length) % list.length;
-        showInLeftDock(list[index].url, list[index].generationId);
+        await showInLeftDock(list[index].url, list[index].generationId);
     });
 
-    // 点击右半边区域：下一张
-    nextBtn.addEventListener('click', (e) => {
+    nextBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const list = getChatImageList();
         if (list.length <= 1) return;
         const currentId = dock.dataset.activeGenerationId;
         let index = list.findIndex(item => item.generationId === currentId);
         index = (index + 1) % list.length;
-        showInLeftDock(list[index].url, list[index].generationId);
+        await showInLeftDock(list[index].url, list[index].generationId);
     });
 
     resetBtn.addEventListener('click', () => {
@@ -425,7 +503,7 @@ function createLeftDock() {
     });
 }
 
-function showInLeftDock(imageUrl, generationId) {
+async function showInLeftDock(imageUrl, generationId) {
     let dock = document.getElementById(LEFT_DOCK_ID);
     if (!dock) {
         createLeftDock();
@@ -433,7 +511,9 @@ function showInLeftDock(imageUrl, generationId) {
     }
     const dockImg = document.getElementById('comfyui-dock-img');
     if (dock && dockImg) {
-        dockImg.src = imageUrl;
+        const offlineUrl = await getImageBlobUrl(generationId);
+        dockImg.src = offlineUrl || imageUrl;
+
         dock.dataset.activeGenerationId = generationId;
         dock.style.display = 'flex';
 
@@ -491,7 +571,7 @@ function createComfyUIPanel() {
                 <label style="font-weight:bold; display:block; margin-top:4px;">工作流 (API 格式 JSON):</label>
                 <p style="font-size:12px; color:#aaa; margin:2px 0 6px 0;">必须包含 <b>%prompt%</b> 占位符，可选 <b>%seed%</b></p>
                 <textarea id="comfyui-workflow" placeholder="粘贴从 ComfyUI 导出的 Save (API format) JSON"></textarea>
-                <button id="comfyui-clear-cache" class="comfy-btn error" style="width:100%; margin-top:8px;">清空所有已生成图片缓存</button>
+                <button id="comfyui-clear-cache" class="comfy-btn error" style="width:100%; margin-top:8px;">清空所有已生成图片离线缓存</button>
             </div>
         </div>
     `;
@@ -570,13 +650,14 @@ function initPanelLogic() {
         }
     });
 
-    clearBtn.addEventListener('click', () => {
-        if (confirm('确认清空所有生图绑定？')) {
+    clearBtn.addEventListener('click', async () => {
+        if (confirm('确认清空所有已生成图片的离线缓存？')) {
             settings.images = {};
             saveSettings();
+            await clearAllImageBlobs();
             const dock = document.getElementById(LEFT_DOCK_ID);
             if (dock) dock.style.display = 'none';
-            toastr.success('已清空，刷新生效');
+            toastr.success('已清空离线缓存，刷新生效');
         }
     });
 
@@ -654,7 +735,7 @@ function simpleHash(str) {
     return 'comfy-' + Math.abs(hash).toString(36);
 }
 
-function displayImage(anchorElement, imageUrl, generationId) {
+async function displayImage(anchorElement, imageUrl, generationId) {
     const mesText = anchorElement.closest('.mes_text');
     const messageNode = anchorElement.closest('.mes');
     if (!mesText) return;
@@ -668,7 +749,7 @@ function displayImage(anchorElement, imageUrl, generationId) {
     }
 
     if (pos === 'left') {
-        showInLeftDock(imageUrl, generationId);
+        await showInLeftDock(imageUrl, generationId);
         return;
     }
 
@@ -677,12 +758,14 @@ function displayImage(anchorElement, imageUrl, generationId) {
         dock.style.display = 'none';
     }
 
+    const offlineUrl = await getImageBlobUrl(generationId);
+
     let container = document.createElement('div');
     container.className = 'comfy-image-container';
     container.dataset.generationId = generationId;
     const img = document.createElement('img');
     img.alt = 'ComfyUI Image';
-    img.src = imageUrl;
+    img.src = offlineUrl || imageUrl;
     container.appendChild(img);
 
     if (pos === 'top') {
@@ -727,7 +810,12 @@ async function processMessageNode(messageNode) {
         if (!generateButton) return;
 
         if (settings.images && settings.images[generationId]) {
-            displayImage(group, settings.images[generationId], generationId);
+            const savedUrl = settings.images[generationId];
+            
+            // ⭐ 核心触发：如果是旧图，静默同步转存进 IndexedDB
+            autoCacheOldImage(generationId, savedUrl);
+
+            displayImage(group, savedUrl, generationId);
             setupGeneratedState(generateButton, generationId);
         } else {
             generateButton.addEventListener('click', onGenerateButtonClick);
@@ -736,7 +824,6 @@ async function processMessageNode(messageNode) {
     });
 }
 
-// ⭐ 样式与“开始生成”完全一致的【查看插画】按钮
 function setupGeneratedState(generateButton, generationId) {
     generateButton.textContent = '重新生成';
     generateButton.disabled = false;
@@ -751,17 +838,16 @@ function setupGeneratedState(generateButton, generationId) {
     const messageNode = generateButton.closest('.mes');
     const settings = getSettings();
 
-    // 仅文字、样式大小完全一致的按钮
     let viewButton = group.querySelector('.comfy-view-button');
     if (!viewButton && settings.imagePosition === 'left') {
         viewButton = document.createElement('button');
         viewButton.className = 'comfy-btn comfy-view-button';
         viewButton.textContent = '查看插画';
         viewButton.title = '将左侧画廊切换为此图';
-        viewButton.addEventListener('click', () => {
+        viewButton.addEventListener('click', async () => {
             const currentSettings = getSettings();
             if (currentSettings.images && currentSettings.images[generationId]) {
-                showInLeftDock(currentSettings.images[generationId], generationId);
+                await showInLeftDock(currentSettings.images[generationId], generationId);
             }
         });
         generateButton.insertAdjacentElement('beforebegin', viewButton);
@@ -778,6 +864,7 @@ function setupGeneratedState(generateButton, generationId) {
             const currentSettings = getSettings();
             delete currentSettings.images[generationId];
             saveSettings();
+            await deleteImageBlob(generationId);
 
             if (messageNode) {
                 const imgContainer = messageNode.querySelector(`.comfy-image-container[data-generation-id="${generationId}"]`);
@@ -843,7 +930,17 @@ async function onGenerateButtonClick(event) {
         const imageUrl = findImageUrlInHistory(finalHistory, promptData.prompt_id, url);
         if (!imageUrl) throw new Error('未找到生成的图片。');
 
-        displayImage(group, imageUrl, generationId);
+        try {
+            const imgRes = await fetch(imageUrl);
+            if (imgRes.ok) {
+                const blob = await imgRes.blob();
+                await saveImageBlob(generationId, blob);
+            }
+        } catch (err) {
+            console.warn('离线缓存写入失败:', err);
+        }
+
+        await displayImage(group, imageUrl, generationId);
         settings.images[generationId] = imageUrl;
         saveSettings();
 
